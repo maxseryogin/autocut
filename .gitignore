@@ -1,0 +1,25 @@
+# Local media, generated assets, dependencies and Python state
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+models/
+media/
+vendor/
+vendor4/
+vendor_ytdlp/
+build/
+dist/
+*.spec
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.m4v
+*.wav
+*.mp3
+*.m4a
+*.aac
