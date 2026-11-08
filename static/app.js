@@ -10,6 +10,7 @@ let sourceAudio={state:'pending'}, adAudio={state:'pending'}, adInspection=null,
 let fitVersion=0, fitTimer=null, autoFit=true, adAspect=1, adOffsetX=0, adOffsetY=0;
 let cachedAdFrame=-1, cachedKeyStrength=-1;
 let subtitles = [], subtitleState = 'idle', subtitleVersion = 0;
+let lastExportURL = null;
 const message = text => $('message').textContent = text;
 const fmt = n => Number.isFinite(n) ? `${String(Math.floor(n / 60)).padStart(2,'0')}:${String(Math.floor(n % 60)).padStart(2,'0')}` : '00:00';
 function setBusy(busy, text) { $('import').disabled = busy; $('import').textContent = busy ? 'Загрузка…' : 'Загрузить ↗'; if (text) $('sourceStatus').textContent = text; }
@@ -285,16 +286,18 @@ function finishExport(){recording=false;activeRecorder=null;setEditingDisabled(f
 $('cancelExport').onclick=()=>{exportCancelled=true;pauseComposition();if(activeRecorder&&activeRecorder.state!=='inactive')activeRecorder.stop();};
 $('export').onclick=async()=>{
   if(!loaded||recording)return;if(customURL&&!crop)return message('Сначала выделите область камеры в исходном кадре.');if(customURL&&background.readyState<2)return message('Дождитесь загрузки фонового видео или уберите фон.');if($('subtitleEnabled').checked&&['queued','loading','transcribing'].includes(subtitleState))return message('Дождитесь готовности субтитров или отключите их перед экспортом.');if(sourceAudio.state==='pending'||(hasAd()&&adAudio.state==='pending'))return message('Дождитесь проверки и выравнивания громкости.');if(hasAd()&&!adInspection)return message('Дождитесь автоматического подбора и проверки размера баннера.');if(!window.MediaRecorder||!canvas.captureStream)return message('Этот браузер не поддерживает экспорт. Откройте приложение в Chrome или Edge.');
-  const mime=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(x=>MediaRecorder.isTypeSupported(x));if(!mime)return message('Этот браузер не поддерживает запись WebM.');
+  const formats=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].filter(x=>MediaRecorder.isTypeSupported(x));if(!formats.length)return message('Этот браузер не поддерживает запись MP4 или WebM.');
   recording=true;exportCancelled=false;exportFailed=false;setEditingDisabled(true);$('export').disabled=true;$('play').disabled=true;$('cancelExport').hidden=false;$('export').textContent='Записываем видео…';message('Идёт запись в реальном времени. Держите вкладку открытой.');
   let stream;
   try{
     pauseComposition();phase='source';adIndex=0;const mix=await setupAudio();if(hasAd()&&!mix)throw new Error('Браузер не поддерживает объединение звука баннера и ролика.');await seekTo(source,0);if(exportCancelled){finishExport();message('Запись отменена.');return;}if(customURL)await seekTo(background,0);if(hasAd())await seekTo(adVideo,0);if(exportCancelled){finishExport();message('Запись отменена.');return;}
     stream=canvas.captureStream(30);if(mix){const audioTrack=mix.stream.getAudioTracks()[0];if(audioTrack)stream.addTrack(audioTrack.clone());}else{const sourceStream=source.captureStream?source.captureStream():null;if(sourceStream)sourceStream.getAudioTracks().forEach(track=>stream.addTrack(track));}
-    const chunks=[],recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:canvas.width>=1080?16000000:8000000,audioBitsPerSecond:192000});activeRecorder=recorder;
+    const chunks=[];let recorder,mime;
+    for(const format of formats){try{recorder=new MediaRecorder(stream,{mimeType:format,videoBitsPerSecond:canvas.width>=1080?16000000:8000000,audioBitsPerSecond:192000});mime=format;break;}catch(e){}}
+    if(!recorder)throw new Error('Браузер не смог запустить запись видео.');activeRecorder=recorder;
     recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
     recorder.onerror=()=>{exportFailed=true;if(recorder.state!=='inactive')recorder.stop();};
-    recorder.onstop=()=>{if(exportCancelled)message('Запись отменена.');else if(exportFailed||!chunks.length)message('Не удалось записать видео. Попробуйте ещё раз.');else{const blob=new Blob(chunks,{type:mime}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='splitclip.webm';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);message('Готово! Видео сохранено в загрузки браузера.');}stream.getTracks().forEach(t=>t.stop());finishExport();};
+    recorder.onstop=()=>{if(exportCancelled)message('Запись отменена.');else if(exportFailed||!chunks.length)message('Не удалось записать видео. Попробуйте ещё раз.');else{const actual=recorder.mimeType||mime,blob=new Blob(chunks,{type:actual});if(lastExportURL)URL.revokeObjectURL(lastExportURL);lastExportURL=URL.createObjectURL(blob);const a=document.createElement('a');a.href=lastExportURL;a.download=actual.startsWith('video/mp4')?'splitclip.mp4':'splitclip.webm';a.textContent='Скачать видео';message('Готово! Если загрузка не началась, нажмите: ');$('message').append(a);a.click();}stream.getTracks().forEach(t=>t.stop());finishExport();};
     recorder.start();await playComposition();
   }catch(e){exportFailed=true;if(activeRecorder&&activeRecorder.state!=='inactive')activeRecorder.stop();else{if(stream)stream.getTracks().forEach(t=>t.stop());finishExport();}message('Не удалось записать видео: '+e.message);}
 };

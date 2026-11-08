@@ -47,7 +47,9 @@ def _run(job_id, path, language):
         if _model is None:
             from faster_whisper import WhisperModel
             from pathlib import Path
-            _model = WhisperModel('medium', device='cpu', compute_type='int8', cpu_threads=min(6, os.cpu_count() or 1), download_root=str(Path(__file__).resolve().parent / 'models'))
+            model_dir = os.environ.get('SPLITCLIP_MODEL_DIR') or str(Path(__file__).resolve().parent / 'models')
+            threads = max(1, min(6, int(os.environ.get('SPLITCLIP_WHISPER_THREADS', os.cpu_count() or 1))))
+            _model = WhisperModel('medium', device='cpu', compute_type='int8', cpu_threads=threads, download_root=model_dir)
         _update(job_id, state='transcribing', message='Распознаём речь…', progress=0)
         segments, info = _model.transcribe(str(path), language=language, beam_size=8, best_of=8, vad_filter=True, word_timestamps=True)
         found = []

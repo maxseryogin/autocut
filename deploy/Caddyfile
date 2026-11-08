@@ -1,0 +1,4 @@
+https://{$SPLITCLIP_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy app:8765
+}

@@ -1,0 +1,39 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      SPLITCLIP_CLOUD: "1"
+      SPLITCLIP_USERNAME: "autocut"
+      SPLITCLIP_PASSWORD: ${SPLITCLIP_PASSWORD:?Set a strong password in .env}
+      SPLITCLIP_MODEL_DIR: /data/models
+      SPLITCLIP_MEDIA_DIR: /tmp/splitclip-media
+      SPLITCLIP_WHISPER_THREADS: "2"
+    expose:
+      - "8765"
+    volumes:
+      - model-cache:/data/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SPLITCLIP_DOMAIN: ${SPLITCLIP_DOMAIN:?Set your DNS hostname in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+volumes:
+  model-cache:
+  caddy-data:
+  caddy-config:

@@ -10,6 +10,11 @@ DATA = Path(os.environ['SPLITCLIP_MEDIA_DIR']) if os.environ.get('SPLITCLIP_MEDI
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__, static_folder=str(BASE / 'static'), static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
+from cloud_auth import configure_cloud_access
+configure_cloud_access(app)
+
+@app.get('/healthz')
+def healthz(): return jsonify(status='ok')
 
 @app.get('/')
 def index(): return app.send_static_file('index.html')
