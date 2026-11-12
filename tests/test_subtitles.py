@@ -1,30 +1,46 @@
-import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from subtitles import _group_words
+from unittest import mock
+import subtitles
 
-def word(start, end, text):
-    return SimpleNamespace(start=start, end=end, word=text)
 
 class SubtitleTests(unittest.TestCase):
-    def test_groups_short_timed_phrases(self):
-        segment = SimpleNamespace(words=[word(0, .3, ' Привет'), word(.31, .65, ' мир.'), word(1.5, 1.9, ' Дальше')], text='', start=0, end=2)
-        captions = _group_words([segment])
-        self.assertEqual([c['text'] for c in captions], ['Привет', 'мир.', 'Дальше'])
-        self.assertEqual((captions[0]['start'], captions[0]['end']), (0, .3))
-        self.assertEqual((captions[1]['start'], captions[1]['end']), (.31, .65))
-        self.assertEqual((captions[2]['start'], captions[2]['end']), (1.5, 1.9))
+    def test_subword_timestamps_and_punctuation(self):
+        result = SimpleNamespace(tokens=[' При', 'вет', ',', ' мир', '!'], timestamps=[.1, .2, .3, .5, .6])
+        self.assertEqual(subtitles._words(result, 10, 2, 0, 20), [
+            {'start': 10.1, 'end': 10.34, 'text': 'Привет,'},
+            {'start': 10.5, 'end': 10.64, 'text': 'мир!'},
+        ])
 
-    def test_segment_fallback_and_empty_words(self):
-        segment = SimpleNamespace(words=[], text=' Текст ', start=2, end=3)
-        self.assertEqual(_group_words([segment]), [{'start': 2, 'end': 3, 'text': 'Текст'}])
-        silent = SimpleNamespace(words=[word(None, None, ' '), word(3, 4, '')], text='', start=3, end=4)
-        self.assertEqual(_group_words([silent]), [])
+    def test_overlap_assigns_word_once(self):
+        result = SimpleNamespace(tokens=[' один', ' два'], timestamps=[.2, 1.2])
+        self.assertEqual([x['text'] for x in subtitles._words(result, 16, 2, 17, 30)], ['два'])
+        self.assertEqual([x['text'] for x in subtitles._words(result, 16, 2, 0, 17)], ['один'])
 
-    def test_missing_word_timestamps_still_splits_caption(self):
-        segment = SimpleNamespace(words=[], text='два слова', start=4, end=6)
-        self.assertEqual(_group_words([segment]), [{'start': 4.0, 'end': 5.0, 'text': 'два'}, {'start': 5.0, 'end': 6.0, 'text': 'слова'}])
+    def test_invalid_timestamps_fail(self):
+        with self.assertRaises(ValueError):
+            subtitles._words(SimpleNamespace(tokens=[' привет'], timestamps=[]), 0, 1, 0, 1)
 
-if __name__ == '__main__': unittest.main()
+    def test_language_restriction_and_job_state(self):
+        with mock.patch.object(subtitles, '_update') as update:
+            subtitles._run('id', 'file', 'en')
+        self.assertEqual(update.call_args.kwargs['state'], 'error')
+        self.assertIn('русский', update.call_args.kwargs['detail'])
+
+    def test_model_uses_f32_local_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in subtitles.MODEL_FILES:
+                (Path(tmp) / name).write_bytes(b'x')
+            fake = mock.Mock()
+            with mock.patch.object(subtitles, '_model_dir', return_value=Path(tmp)), mock.patch('onnx_asr.load_model', return_value=fake) as load:
+                subtitles._load_model('id')
+            self.assertEqual(load.call_args.kwargs['path'], Path(tmp))
+            self.assertIsNone(load.call_args.kwargs['quantization'])
+            self.assertEqual(load.call_args.kwargs['providers'], ['CPUExecutionProvider'])
+            fake.with_timestamps.assert_called_once()
+
+
+if __name__ == '__main__':
+    unittest.main()

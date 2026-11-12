@@ -1,6 +1,7 @@
 # Local media, generated assets, dependencies and Python state
 __pycache__/
 *.py[cod]
+*.log
 .venv/
 venv/
 .env

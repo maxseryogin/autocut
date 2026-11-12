@@ -20,6 +20,51 @@ def _boundary(profile, start, stop, threshold, side):
     return min(strong) if side == 'after' else max(strong)
 
 
+def _caption_band(frames, boundary):
+    """Conservatively locate high-contrast text crossing a horizontal seam."""
+    height, width = frames[0].shape[:2]
+    if width > height or not (.18 * height < boundary < .8 * height):
+        return None
+    profiles = []
+    for frame in frames:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        bright = (gray > 210).astype(np.uint8)
+        dark = (gray < 65).astype(np.uint8)
+        near_dark = cv2.dilate(dark, np.ones((7, 7), np.uint8))
+        profiles.append((bright * near_dark)[:, int(width * .1):int(width * .9)].mean(axis=1))
+    profile = np.median(profiles, axis=0)
+    profile = np.convolve(profile, np.ones(5) / 5, mode='same')
+    start = max(0, int(boundary - height * .10))
+    end = min(height, int(boundary + height * .10))
+    window = profile[start:end]
+    if not len(window):
+        return None
+    peak, baseline = float(window.max()), float(np.median(window))
+    if peak < .075:
+        return None
+    threshold = max(.025, baseline * 3, peak * .15)
+    active = profile >= threshold
+    groups, first = [], None
+    for y in range(start, end):
+        if active[y] and first is None:
+            first = y
+        if first is not None and (not active[y] or y == end - 1):
+            last = y if active[y] else y - 1
+            if groups and first - groups[-1][1] <= 6:
+                groups[-1] = (groups[-1][0], last)
+            else:
+                groups.append((first, last))
+            first = None
+    candidates = [(a, b) for a, b in groups
+                  if height * .008 <= b - a + 1 <= height * .10
+                  and a - height * .025 <= boundary <= b + height * .025]
+    if not candidates:
+        return None
+    a, b = max(candidates, key=lambda pair: float(profile[pair[0]:pair[1] + 1].max()))
+    padding = max(5, int(round(height * .012)))
+    return {'top': max(0, a - padding), 'bottom': min(height, b + padding + 1)}
+
+
 def find_camera(path, current_time=0):
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
@@ -58,6 +103,16 @@ def find_camera(path, current_time=0):
     threshold = max(14.0, float(np.median(hp)) * 2.5)
     bottom = _boundary(hp, y + fh * 1.10, y + fh * 5, threshold, 'after')
     top = _boundary(hp, y - fh * 3, y - fh * .10, threshold, 'before')
+    early_band = None
+    # A webcam crop can cut through the detected face; in that case the real
+    # seam is above the face's bottom. Accept it only with both a strong
+    # full-width edge and caption evidence near that edge.
+    if width <= height and not top:
+        early = _boundary(hp, y + fh * .55, y + fh * 1.10, threshold, 'after')
+        if early is not None and hp[early - 1] >= max(25.0, threshold * 1.5):
+            candidate_band = _caption_band(frames, early)
+            if candidate_band and (bottom is None or early < bottom):
+                bottom, early_band = early, candidate_band
     if bottom is not None:
         top = top or 0
         # Portrait edits commonly put a full-width webcam above the game.
@@ -65,7 +120,12 @@ def find_camera(path, current_time=0):
             left, right = 0, width
         else:
             left, right = max(0, int(x + fw / 2 - fw * 1.8)), min(width, int(x + fw / 2 + fw * 1.8))
-        return {'x': left, 'y': top, 'width': right - left, 'height': bottom - top, 'confidence': 'border'}
+        result = {'x': left, 'y': top, 'width': right - left, 'height': bottom - top, 'confidence': 'border'}
+        if width <= height and top == 0:
+            band = early_band or _caption_band(frames, bottom)
+            if band:
+                result['caption_band'] = band
+        return result
     # Without a clear boundary, avoid guessing that all surrounding game is webcam.
     left = max(0, int(x + fw / 2 - fw * 1.7))
     right = min(width, int(x + fw / 2 + fw * 1.7))

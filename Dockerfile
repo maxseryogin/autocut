@@ -11,6 +11,6 @@ COPY requirements.txt requirements-cloud.txt ./
 RUN pip install -r requirements-cloud.txt
 COPY --chown=splitclip:splitclip . .
 USER splitclip
-ENV SPLITCLIP_CLOUD=1 SPLITCLIP_MODEL_DIR=/data/models SPLITCLIP_MEDIA_DIR=/tmp/splitclip-media SPLITCLIP_WHISPER_THREADS=2
+ENV SPLITCLIP_CLOUD=1 SPLITCLIP_MODEL_DIR=/data/models SPLITCLIP_MEDIA_DIR=/tmp/splitclip-media SPLITCLIP_GIGAAM_THREADS=2
 EXPOSE 8765
 CMD ["gunicorn", "--bind", "0.0.0.0:8765", "--workers", "1", "--threads", "6", "--timeout", "300", "app:app"]

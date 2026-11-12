@@ -1,4 +1,4 @@
-import os, sys, uuid, tempfile, threading, webbrowser
+import os, sys, uuid, tempfile, threading, webbrowser, subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_from_directory
@@ -12,6 +12,53 @@ app = Flask(__name__, static_folder=str(BASE / 'static'), static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
 from cloud_auth import configure_cloud_access
 configure_cloud_access(app)
+
+@app.post('/api/export')
+def export_start():
+    import offline_export
+    try:
+        data = request.get_json(silent=True) or {}
+        if data.get('protocol') != offline_export.EXPORT_PROTOCOL:
+            return jsonify(error='Версии страницы и сервера не совпадают. Обнови страницу.'), 409
+        job, count = offline_export.start(data, DATA)
+        return jsonify(job=job, frames=count, fps=offline_export.EXPORT_FPS, protocol=offline_export.EXPORT_PROTOCOL), 201
+    except (ValueError, OSError) as exc:
+        return jsonify(error=str(exc) or 'Не удалось начать экспорт.'), 400
+
+@app.get('/api/export/<job>/input/<kind>')
+def export_input(job, kind):
+    import offline_export
+    from flask import Response
+    try:
+        index = int(request.args.get('index', ''))
+        return Response(offline_export.input_frame(job, kind, index), mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+    except (ValueError, OSError) as exc:
+        return jsonify(error=str(exc) or 'Не удалось декодировать кадр.'), 400
+
+@app.post('/api/export/<job>/frame')
+def export_frame(job):
+    import offline_export
+    try:
+        offline_export.frame(job, request.get_data())
+        return '', 204
+    except (ValueError, OSError) as exc:
+        return jsonify(error=str(exc) or 'Не удалось сохранить кадр.'), 400
+
+@app.post('/api/export/<job>/finish')
+def export_finish(job):
+    import offline_export
+    try:
+        return jsonify(url='/media/' + offline_export.finish(job))
+    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+        app.logger.warning('Export failed: %s', exc)
+        offline_export.cancel(job)
+        return jsonify(error=str(exc) or 'Не удалось собрать видео. Попробуйте ещё раз.'), 400
+
+@app.delete('/api/export/<job>')
+def export_cancel(job):
+    import offline_export
+    offline_export.cancel(job)
+    return '', 204
 
 @app.get('/healthz')
 def healthz(): return jsonify(status='ok')
@@ -62,6 +109,34 @@ def import_video():
         app.logger.warning('TikTok import failed: %s', detail[:400])
         return jsonify(error=message), 400
 
+@app.post('/api/prepare-source')
+def prepare_source():
+    data = request.get_json(silent=True) or {}
+    name = str(data.get('name', ''))
+    if not name or Path(name).name != name or not (DATA / name).is_file():
+        return jsonify(error='Исходное видео не найдено. Загрузите его заново.'), 400
+    output = DATA / (uuid.uuid4().hex + '.mp4')
+    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', str(DATA / name),
+               '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+               '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', str(output)]
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+    try:
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                timeout=600, creationflags=flags, check=False)
+        if result.returncode or not output.is_file() or output.stat().st_size == 0:
+            app.logger.warning('Source conversion failed: %s', result.stderr.decode('utf-8', errors='replace')[-1000:])
+            raise ValueError('conversion failed')
+        return jsonify(url='/media/' + output.name)
+    except FileNotFoundError:
+        output.unlink(missing_ok=True)
+        return jsonify(error='Для преобразования видео нужен FFmpeg. Установите его и перезапустите приложение.'), 503
+    except subprocess.TimeoutExpired:
+        output.unlink(missing_ok=True)
+        return jsonify(error='Преобразование видео заняло слишком много времени. Попробуйте более короткий файл.'), 408
+    except (ValueError, OSError):
+        output.unlink(missing_ok=True)
+        return jsonify(error='Не удалось преобразовать видео для браузера. Попробуйте другой файл.'), 400
+
 @app.post('/api/detect')
 def detect():
     data = request.get_json(silent=True) or {}
@@ -85,8 +160,8 @@ def create_subtitles():
     if not name or Path(name).name != name or not (DATA / name).is_file():
         return jsonify(error='Сначала загрузите видео.'), 400
     language = data.get('language') or None
-    if language not in (None, 'ru', 'uk', 'en'):
-        return jsonify(error='Неизвестный язык субтитров.'), 400
+    if language not in (None, 'ru'):
+        return jsonify(error='GigaAM v3 поддерживает только русский язык.'), 400
     from subtitles import start
     return jsonify(job_id=start(DATA / name, language)), 202
 
