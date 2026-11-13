@@ -24,3 +24,5 @@ dist/
 *.mp3
 *.m4a
 *.aac
+
+twitch_data/

@@ -58,6 +58,10 @@ const run=s=>vm.runInContext(s,sandbox),wait=()=>new Promise(resolve=>setImmedia
   const stretch=composition.captionStretch;assert.deepEqual(stretch(1,1,2),{x:.86,y:1.03});assert.deepEqual(stretch(1.18,1,2),{x:1,y:1});assert(stretch(1.05,1,2).x>.86&&stretch(1.05,1,2).x<1);assert.equal(stretch(1.05,1,1.1).x,1,'animation finishes within short words');
   const solid=(r,g,b)=>new Uint8ClampedArray(Array(100).fill([r,g,b,255]).flat());const dark=composition.estimateColor([solid(55,55,55),solid(58,58,58),solid(60,60,60)]),bright=composition.estimateColor([solid(210,210,210)]);assert(dark.brightness>1);assert(bright.brightness<1);assert.equal(composition.estimateColor([solid(0,0,0)]),null);assert.equal(composition.colorFilter(dark,0),'none');assert(composition.estimateColor([solid(55,55,55),solid(55,55,55),solid(55,55,55),solid(210,210,210)]).brightness>1,'one bright frame does not dominate');
   source.duration=15;ad.duration=4;source.currentTime=0;run("loaded=true;adReady=false;automaticAdTiming=true;suggestedAdTime=7;applyAutomaticAdTime()");assert.equal(run('adAt'),7,'the GitHub selection uses the source duration');
+  const durationBeforeSpeed=run('totalDuration()');element('previewSpeed').value='1.5';element('previewSpeed').onchange();
+  assert.equal(source.playbackRate,1.5);assert.equal(bg.playbackRate,1.5);assert.equal(ad.playbackRate,1.5);
+  assert.equal(run('totalDuration()'),durationBeforeSpeed,'preview speed must not change the exported duration');
+  element('previewSpeed').value='1';element('previewSpeed').onchange();
   ad.onloadedmetadata();assert.equal(run('adAt'),7,'the GitHub selection does not shift with banner length');
   element('adTime').value='200';element('adTime').oninput();assert.equal(run('adAt'),3);ad.duration=5;ad.onloadedmetadata();assert.equal(run('adAt'),3,'loading a banner preserves a manually selected time');
   element('adAutoTime').onclick();assert.equal(run('adAt'),7,'the automatic button restores placement');await wait();

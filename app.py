@@ -1,7 +1,7 @@
 import os, sys, uuid, tempfile, threading, webbrowser, subprocess
 from pathlib import Path
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory
 
 BASE = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 sys.path.insert(0, str(BASE / 'vendor4'))
@@ -12,6 +12,65 @@ app = Flask(__name__, static_folder=str(BASE / 'static'), static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
 from cloud_auth import configure_cloud_access
 configure_cloud_access(app)
+
+_twitch_lock = threading.Lock()
+_twitch_instance = None
+
+def twitch_library():
+    global _twitch_instance
+    with _twitch_lock:
+        if _twitch_instance is None:
+            from twitch_library import TwitchLibrary
+            root = Path(os.environ.get('SPLITCLIP_TWITCH_DIR', BASE / 'twitch_data'))
+            _twitch_instance = TwitchLibrary(root)
+        return _twitch_instance
+
+@app.before_request
+def protect_local_twitch_actions():
+    # Cross-site HTML forms can send POST requests to a localhost server even
+    # without CORS. Only allow a browser origin belonging to this instance.
+    if request.path.startswith('/api/twitch/') and request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        origin = request.headers.get('Origin')
+        if origin:
+            parsed = urlparse(origin)
+            if parsed.scheme != request.scheme or parsed.netloc.lower() != request.host.lower():
+                return jsonify(error='Запрос с другого сайта запрещён.'), 403
+
+@app.get('/api/twitch/status')
+def twitch_status():
+    try: return jsonify(twitch_library().status())
+    except (OSError, ValueError) as exc: return jsonify(error=str(exc)), 500
+
+@app.post('/api/twitch/search')
+def twitch_search():
+    try:
+        library = twitch_library()
+        started = library.start()
+        return jsonify(started=started, **library.status())
+    except (OSError, ValueError) as exc: return jsonify(error=str(exc)), 500
+
+@app.post('/api/twitch/stop')
+def twitch_stop():
+    library = twitch_library()
+    library.stop()
+    return jsonify(library.status())
+
+@app.get('/api/twitch/clips/<clip_id>/video')
+def twitch_video(clip_id):
+    try: return send_file(twitch_library().video(clip_id), conditional=True, mimetype='video/mp4')
+    except (ValueError, FileNotFoundError): return jsonify(error='Клип не найден.'), 404
+
+@app.post('/api/twitch/clips/<clip_id>/select')
+def twitch_select(clip_id):
+    try: return jsonify(twitch_library().select(clip_id, DATA))
+    except (ValueError, OSError) as exc: return jsonify(error=str(exc)), 400
+
+@app.post('/api/twitch/clips/<clip_id>/reject')
+def twitch_reject(clip_id):
+    try:
+        twitch_library().reject(clip_id)
+        return '', 204
+    except (ValueError, OSError) as exc: return jsonify(error=str(exc)), 400
 
 @app.post('/api/export')
 def export_start():
